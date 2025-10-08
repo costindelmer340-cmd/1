@@ -1,0 +1,642 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+import threading
+import time
+import itertools
+
+
+class SDES:
+    """
+    S-DES算法实现类
+    """
+
+    # 定义所有置换盒和S盒
+    P10 = [3, 5, 2, 7, 4, 10, 1, 9, 8, 6]
+    P8 = [6, 3, 7, 4, 8, 5, 10, 9]
+    IP = [2, 6, 3, 1, 4, 8, 5, 7]
+    IP_INV = [4, 1, 3, 5, 7, 2, 8, 6]
+    EP = [4, 1, 2, 3, 2, 3, 4, 1]
+    P4 = [2, 4, 3, 1]
+
+    SBOX1 = [
+        [1, 0, 3, 2],
+        [3, 2, 1, 0],
+        [0, 2, 1, 3],
+        [3, 1, 0, 2]
+    ]
+
+    SBOX2 = [
+        [0, 1, 2, 3],
+        [2, 3, 1, 0],
+        [3, 0, 1, 2],
+        [2, 1, 0, 3]
+    ]
+
+    @staticmethod
+    def permute(bits, permutation):
+        """执行置换操作"""
+        return [bits[i - 1] for i in permutation]
+
+    @staticmethod
+    def left_shift(bits, n):
+        """循环左移"""
+        return bits[n:] + bits[:n]
+
+    @staticmethod
+    def generate_keys(key):
+        """生成子密钥K1和K2"""
+        # P10置换
+        p10_key = SDES.permute(key, SDES.P10)
+
+        # 分割并左移
+        left = p10_key[:5]
+        right = p10_key[5:]
+
+        # 第一次左移
+        left_shift1_left = SDES.left_shift(left, 1)
+        left_shift1_right = SDES.left_shift(right, 1)
+
+        # 生成K1
+        k1 = SDES.permute(left_shift1_left + left_shift1_right, SDES.P8)
+
+        # 第二次左移（左移2位）
+        left_shift2_left = SDES.left_shift(left_shift1_left, 2)
+        left_shift2_right = SDES.left_shift(left_shift1_right, 2)
+
+        # 生成K2
+        k2 = SDES.permute(left_shift2_left + left_shift2_right, SDES.P8)
+
+        return k1, k2
+
+    @staticmethod
+    def xor(bits1, bits2):
+        """异或操作"""
+        return [b1 ^ b2 for b1, b2 in zip(bits1, bits2)]
+
+    @staticmethod
+    def sbox_lookup(bits, sbox):
+        """S盒查找"""
+        row = (bits[0] << 1) + bits[1]
+        col = (bits[2] << 1) + bits[3]
+        value = sbox[row][col]
+        return [value >> 1 & 1, value & 1]
+
+    @staticmethod
+    def f_function(bits, subkey):
+        """轮函数F"""
+        # 扩展置换
+        expanded = SDES.permute(bits, SDES.EP)
+
+        # 与子密钥异或
+        xor_result = SDES.xor(expanded, subkey)
+
+        # S盒替换
+        s1_result = SDES.sbox_lookup(xor_result[:4], SDES.SBOX1)
+        s2_result = SDES.sbox_lookup(xor_result[4:], SDES.SBOX2)
+
+        # P4置换
+        p4_result = SDES.permute(s1_result + s2_result, SDES.P4)
+
+        return p4_result
+
+    @staticmethod
+    def encrypt_block(plaintext, key):
+        """加密一个8位分组"""
+        # 生成子密钥
+        k1, k2 = SDES.generate_keys(key)
+
+        # 初始置换
+        ip_result = SDES.permute(plaintext, SDES.IP)
+
+        # 第一轮
+        left = ip_result[:4]
+        right = ip_result[4:]
+        f_result = SDES.f_function(right, k1)
+        new_right = SDES.xor(left, f_result)
+
+        # 交换
+        left, right = right, new_right
+
+        # 第二轮
+        f_result = SDES.f_function(right, k2)
+        new_left = SDES.xor(left, f_result)
+
+        # 最终置换
+        ciphertext = SDES.permute(new_left + right, SDES.IP_INV)
+
+        return ciphertext
+
+    @staticmethod
+    def decrypt_block(ciphertext, key):
+        """解密一个8位分组"""
+        # 生成子密钥
+        k1, k2 = SDES.generate_keys(key)
+
+        # 初始置换
+        ip_result = SDES.permute(ciphertext, SDES.IP)
+
+        # 第一轮
+        left = ip_result[:4]
+        right = ip_result[4:]
+        f_result = SDES.f_function(right, k2)
+        new_right = SDES.xor(left, f_result)
+
+        # 交换
+        left, right = right, new_right
+
+        # 第二轮
+        f_result = SDES.f_function(right, k1)
+        new_left = SDES.xor(left, f_result)
+
+        # 最终置换
+        plaintext = SDES.permute(new_left + right, SDES.IP_INV)
+
+        return plaintext
+
+    @staticmethod
+    def text_to_binary(text):
+        """将文本转换为二进制列表"""
+        binary_data = []
+        for char in text:
+            binary_char = [int(bit) for bit in format(ord(char), '08b')]
+            binary_data.append(binary_char)
+        return binary_data
+
+    @staticmethod
+    def binary_to_text(binary_data):
+        """将二进制列表转换为文本"""
+        text = ''
+        for binary_char in binary_data:
+            char_code = int(''.join(map(str, binary_char)), 2)
+            text += chr(char_code)
+        return text
+
+    @staticmethod
+    def string_to_binary_list(binary_string):
+        """将二进制字符串转换为二进制列表"""
+        return [int(bit) for bit in binary_string]
+
+    @staticmethod
+    def binary_list_to_string(binary_list):
+        """将二进制列表转换为二进制字符串"""
+        return ''.join(map(str, binary_list))
+
+
+class SDesGUI:
+    """
+    S-DES图形用户界面
+    """
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("S-DES加解密系统")
+        self.root.geometry("800x700")
+
+        # 创建选项卡
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # 创建各个页面
+        self.create_basic_test_tab()
+        self.create_cross_test_tab()
+        self.create_extension_tab()
+        self.create_brute_force_tab()
+        self.create_analysis_tab()
+
+        # 暴力破解控制变量
+        self.brute_force_running = False
+
+    def create_basic_test_tab(self):
+        """创建基本测试选项卡"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="基本测试")
+
+        # 输入数据
+        ttk.Label(frame, text="8位明文:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.plaintext_entry = ttk.Entry(frame, width=20)
+        self.plaintext_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(frame, text="10位密钥:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.key_entry = ttk.Entry(frame, width=20)
+        self.key_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        # 按钮
+        ttk.Button(frame, text="加密", command=self.encrypt_basic).grid(row=2, column=0, padx=5, pady=10)
+        ttk.Button(frame, text="解密", command=self.decrypt_basic).grid(row=2, column=1, padx=5, pady=10)
+
+        # 结果显示
+        ttk.Label(frame, text="加密结果:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        self.ciphertext_label = ttk.Label(frame, text="")
+        self.ciphertext_label.grid(row=3, column=1, padx=5, pady=5, sticky='w')
+
+        ttk.Label(frame, text="解密结果:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        self.decrypted_label = ttk.Label(frame, text="")
+        self.decrypted_label.grid(row=4, column=1, padx=5, pady=5, sticky='w')
+
+        # 示例按钮
+        ttk.Button(frame, text="填充示例", command=self.fill_example).grid(row=5, column=0, columnspan=2, pady=10)
+
+    def create_cross_test_tab(self):
+        """创建交叉测试选项卡"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="交叉测试")
+
+        ttk.Label(frame, text="此功能用于验证不同实现的兼容性").pack(pady=10)
+        ttk.Label(frame, text="请使用相同密钥和明文与其他组进行测试").pack(pady=5)
+
+        # 测试区域
+        test_frame = ttk.LabelFrame(frame, text="交叉测试验证")
+        test_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(test_frame, text="明文:").grid(row=0, column=0, padx=5, pady=5)
+        self.cross_plaintext = ttk.Entry(test_frame, width=20)
+        self.cross_plaintext.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(test_frame, text="密钥:").grid(row=1, column=0, padx=5, pady=5)
+        self.cross_key = ttk.Entry(test_frame, width=20)
+        self.cross_key.grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Button(test_frame, text="加密", command=self.cross_encrypt).grid(row=2, column=0, columnspan=2, pady=10)
+
+        ttk.Label(test_frame, text="密文:").grid(row=3, column=0, padx=5, pady=5)
+        self.cross_ciphertext = ttk.Label(test_frame, text="")
+        self.cross_ciphertext.grid(row=3, column=1, padx=5, pady=5)
+
+    def create_extension_tab(self):
+        """创建扩展功能选项卡"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="扩展功能")
+
+        # 文本加密
+        text_frame = ttk.LabelFrame(frame, text="文本加密")
+        text_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(text_frame, text="输入文本:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        self.text_input = scrolledtext.ScrolledText(text_frame, width=50, height=4)
+        self.text_input.grid(row=1, column=0, columnspan=2, padx=5, pady=5)
+
+        ttk.Label(text_frame, text="密钥:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        self.text_key = ttk.Entry(text_frame, width=20)
+        self.text_key.grid(row=2, column=1, padx=5, pady=5)
+
+        ttk.Button(text_frame, text="加密文本", command=self.encrypt_text).grid(row=3, column=0, padx=5, pady=10)
+        ttk.Button(text_frame, text="解密文本", command=self.decrypt_text).grid(row=3, column=1, padx=5, pady=10)
+
+        ttk.Label(text_frame, text="结果:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        self.text_result = scrolledtext.ScrolledText(text_frame, width=50, height=4)
+        self.text_result.grid(row=5, column=0, columnspan=2, padx=5, pady=5)
+
+    def create_brute_force_tab(self):
+        """创建暴力破解选项卡"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="暴力破解")
+
+        # 已知明密文对
+        known_frame = ttk.LabelFrame(frame, text="已知明密文对")
+        known_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(known_frame, text="已知明文:").grid(row=0, column=0, padx=5, pady=5)
+        self.known_plaintext = ttk.Entry(known_frame, width=20)
+        self.known_plaintext.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(known_frame, text="已知密文:").grid(row=1, column=0, padx=5, pady=5)
+        self.known_ciphertext = ttk.Entry(known_frame, width=20)
+        self.known_ciphertext.grid(row=1, column=1, padx=5, pady=5)
+
+        # 破解控制
+        control_frame = ttk.LabelFrame(frame, text="暴力破解控制")
+        control_frame.pack(fill='x', padx=10, pady=10)
+
+        self.brute_force_status = ttk.Label(control_frame, text="准备就绪")
+        self.brute_force_status.pack(pady=5)
+
+        self.progress = ttk.Progressbar(control_frame, mode='indeterminate')
+        self.progress.pack(fill='x', padx=10, pady=5)
+
+        button_frame = ttk.Frame(control_frame)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="开始暴力破解", command=self.start_brute_force).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="停止破解", command=self.stop_brute_force).pack(side='left', padx=5)
+
+        # 结果显示
+        result_frame = ttk.LabelFrame(frame, text="破解结果")
+        result_frame.pack(fill='x', padx=10, pady=10)
+
+        self.brute_force_result = scrolledtext.ScrolledText(result_frame, width=70, height=8)
+        self.brute_force_result.pack(padx=5, pady=5)
+
+    def create_analysis_tab(self):
+        """创建封闭测试分析选项卡"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="封闭测试")
+
+        ttk.Label(frame, text="密钥碰撞分析").pack(pady=10)
+
+        # 测试设置
+        test_frame = ttk.LabelFrame(frame, text="测试设置")
+        test_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(test_frame, text="测试明文:").grid(row=0, column=0, padx=5, pady=5)
+        self.test_plaintext = ttk.Entry(test_frame, width=20)
+        self.test_plaintext.grid(row=0, column=1, padx=5, pady=5)
+        self.test_plaintext.insert(0, "10101010")
+
+        ttk.Button(test_frame, text="分析密钥碰撞", command=self.analyze_collisions).grid(row=1, column=0, columnspan=2,
+                                                                                          pady=10)
+
+        # 分析结果
+        result_frame = ttk.LabelFrame(frame, text="分析结果")
+        result_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        self.analysis_result = scrolledtext.ScrolledText(result_frame, width=70, height=15)
+        self.analysis_result.pack(fill='both', expand=True, padx=5, pady=5)
+
+    def validate_binary_input(self, text, length):
+        """验证二进制输入"""
+        if len(text) != length:
+            return False
+        if not all(bit in '01' for bit in text):
+            return False
+        return True
+
+    def fill_example(self):
+        """填充示例数据"""
+        self.plaintext_entry.delete(0, tk.END)
+        self.plaintext_entry.insert(0, "10101010")
+        self.key_entry.delete(0, tk.END)
+        self.key_entry.insert(0, "1010000010")
+
+    def encrypt_basic(self):
+        """基本加密"""
+        plaintext = self.plaintext_entry.get()
+        key = self.key_entry.get()
+
+        if not self.validate_binary_input(plaintext, 8):
+            messagebox.showerror("错误", "明文必须是8位二进制数")
+            return
+        if not self.validate_binary_input(key, 10):
+            messagebox.showerror("错误", "密钥必须是10位二进制数")
+            return
+
+        plaintext_bits = SDES.string_to_binary_list(plaintext)
+        key_bits = SDES.string_to_binary_list(key)
+
+        ciphertext_bits = SDES.encrypt_block(plaintext_bits, key_bits)
+        ciphertext = SDES.binary_list_to_string(ciphertext_bits)
+
+        self.ciphertext_label.config(text=ciphertext)
+
+        # 自动解密显示
+        decrypted_bits = SDES.decrypt_block(ciphertext_bits, key_bits)
+        decrypted = SDES.binary_list_to_string(decrypted_bits)
+        self.decrypted_label.config(text=decrypted)
+
+    def decrypt_basic(self):
+        """基本解密"""
+        ciphertext = self.ciphertext_label.cget("text")
+        key = self.key_entry.get()
+
+        if not ciphertext:
+            messagebox.showerror("错误", "请先加密生成密文")
+            return
+        if not self.validate_binary_input(key, 10):
+            messagebox.showerror("错误", "密钥必须是10位二进制数")
+            return
+
+        ciphertext_bits = SDES.string_to_binary_list(ciphertext)
+        key_bits = SDES.string_to_binary_list(key)
+
+        decrypted_bits = SDES.decrypt_block(ciphertext_bits, key_bits)
+        decrypted = SDES.binary_list_to_string(decrypted_bits)
+
+        self.decrypted_label.config(text=decrypted)
+
+    def cross_encrypt(self):
+        """交叉测试加密"""
+        plaintext = self.cross_plaintext.get()
+        key = self.cross_key.get()
+
+        if not self.validate_binary_input(plaintext, 8):
+            messagebox.showerror("错误", "明文必须是8位二进制数")
+            return
+        if not self.validate_binary_input(key, 10):
+            messagebox.showerror("错误", "密钥必须是10位二进制数")
+            return
+
+        plaintext_bits = SDES.string_to_binary_list(plaintext)
+        key_bits = SDES.string_to_binary_list(key)
+
+        ciphertext_bits = SDES.encrypt_block(plaintext_bits, key_bits)
+        ciphertext = SDES.binary_list_to_string(ciphertext_bits)
+
+        self.cross_ciphertext.config(text=ciphertext)
+
+    def encrypt_text(self):
+        """加密文本"""
+        text = self.text_input.get("1.0", tk.END).strip()
+        key = self.text_key.get()
+
+        if not text:
+            messagebox.showerror("错误", "请输入要加密的文本")
+            return
+        if not self.validate_binary_input(key, 10):
+            messagebox.showerror("错误", "密钥必须是10位二进制数")
+            return
+
+        key_bits = SDES.string_to_binary_list(key)
+        binary_data = SDES.text_to_binary(text)
+
+        encrypted_data = []
+        for binary_char in binary_data:
+            encrypted_char = SDES.encrypt_block(binary_char, key_bits)
+            encrypted_data.append(encrypted_char)
+
+        encrypted_text = SDES.binary_to_text(encrypted_data)
+
+        self.text_result.delete("1.0", tk.END)
+        self.text_result.insert("1.0", encrypted_text)
+
+    def decrypt_text(self):
+        """解密文本"""
+        text = self.text_result.get("1.0", tk.END).strip()
+        key = self.text_key.get()
+
+        if not text:
+            messagebox.showerror("错误", "请输入要解密的文本")
+            return
+        if not self.validate_binary_input(key, 10):
+            messagebox.showerror("错误", "密钥必须是10位二进制数")
+            return
+
+        key_bits = SDES.string_to_binary_list(key)
+        binary_data = SDES.text_to_binary(text)
+
+        decrypted_data = []
+        for binary_char in binary_data:
+            decrypted_char = SDES.decrypt_block(binary_char, key_bits)
+            decrypted_data.append(decrypted_char)
+
+        decrypted_text = SDES.binary_to_text(decrypted_data)
+
+        self.text_result.delete("1.0", tk.END)
+        self.text_result.insert("1.0", decrypted_text)
+
+    def start_brute_force(self):
+        """开始暴力破解"""
+        plaintext = self.known_plaintext.get()
+        ciphertext = self.known_ciphertext.get()
+
+        if not self.validate_binary_input(plaintext, 8):
+            messagebox.showerror("错误", "已知明文必须是8位二进制数")
+            return
+        if not self.validate_binary_input(ciphertext, 8):
+            messagebox.showerror("错误", "已知密文必须是8位二进制数")
+            return
+
+        self.brute_force_running = True
+        self.progress.start()
+        self.brute_force_status.config(text="正在暴力破解...")
+        self.brute_force_result.delete("1.0", tk.END)
+
+        # 在新线程中运行暴力破解
+        thread = threading.Thread(target=self.run_brute_force, args=(plaintext, ciphertext))
+        thread.daemon = True
+        thread.start()
+
+    def stop_brute_force(self):
+        """停止暴力破解"""
+        self.brute_force_running = False
+        self.progress.stop()
+        self.brute_force_status.config(text="已停止")
+
+    def run_brute_force(self, plaintext, ciphertext):
+        """运行暴力破解"""
+        start_time = time.time()
+        plaintext_bits = SDES.string_to_binary_list(plaintext)
+        ciphertext_bits = SDES.string_to_binary_list(ciphertext)
+
+        found_keys = []
+        total_keys = 1024  # 2^10
+
+        self.brute_force_result.insert(tk.END, f"开始暴力破解...\n")
+        self.brute_force_result.insert(tk.END, f"搜索空间: {total_keys} 个密钥\n")
+        self.brute_force_result.insert(tk.END, "-" * 50 + "\n")
+
+        # 遍历所有可能的10位密钥
+        for i in range(total_keys):
+            if not self.brute_force_running:
+                break
+
+            # 生成当前测试密钥
+            key_bits = [int(bit) for bit in format(i, '010b')]
+
+            # 尝试加密
+            test_ciphertext = SDES.encrypt_block(plaintext_bits, key_bits)
+
+            # 检查是否匹配
+            if test_ciphertext == ciphertext_bits:
+                key_str = SDES.binary_list_to_string(key_bits)
+                found_keys.append(key_str)
+                self.brute_force_result.insert(tk.END, f"找到匹配密钥: {key_str}\n")
+                self.brute_force_result.see(tk.END)
+
+            # 每处理64个密钥更新一次进度
+            if i % 64 == 0:
+                elapsed = time.time() - start_time
+                self.brute_force_status.config(text=f"进度: {i}/{total_keys} - 已用时间: {elapsed:.2f}秒")
+
+        end_time = time.time()
+        total_time = end_time - start_time
+
+        self.progress.stop()
+        self.brute_force_status.config(text=f"完成 - 用时: {total_time:.2f}秒")
+
+        # 显示最终结果
+        self.brute_force_result.insert(tk.END, "-" * 50 + "\n")
+        if found_keys:
+            self.brute_force_result.insert(tk.END, f"\n共找到 {len(found_keys)} 个匹配密钥:\n")
+            for key in found_keys:
+                self.brute_force_result.insert(tk.END, f"  {key}\n")
+        else:
+            self.brute_force_result.insert(tk.END, "未找到匹配密钥\n")
+
+        self.brute_force_result.insert(tk.END, f"\n总用时: {total_time:.4f} 秒\n")
+        self.brute_force_result.see(tk.END)
+
+    def analyze_collisions(self):
+        """分析密钥碰撞"""
+        plaintext = self.test_plaintext.get()
+
+        if not self.validate_binary_input(plaintext, 8):
+            messagebox.showerror("错误", "测试明文必须是8位二进制数")
+            return
+
+        plaintext_bits = SDES.string_to_binary_list(plaintext)
+
+        self.analysis_result.delete("1.0", tk.END)
+        self.analysis_result.insert(tk.END, "开始分析密钥碰撞...\n")
+        self.analysis_result.insert(tk.END, f"测试明文: {plaintext}\n")
+        self.analysis_result.insert(tk.END, "-" * 50 + "\n")
+
+        # 存储密文到密钥的映射
+        ciphertext_to_keys = {}
+
+        # 测试所有可能的密钥
+        for i in range(1024):  # 2^10
+            key_bits = [int(bit) for bit in format(i, '010b')]
+            key_str = SDES.binary_list_to_string(key_bits)
+
+            ciphertext_bits = SDES.encrypt_block(plaintext_bits, key_bits)
+            ciphertext_str = SDES.binary_list_to_string(ciphertext_bits)
+
+            if ciphertext_str not in ciphertext_to_keys:
+                ciphertext_to_keys[ciphertext_str] = []
+            ciphertext_to_keys[ciphertext_str].append(key_str)
+
+        # 分析结果
+        collisions = 0
+        total_ciphertexts = len(ciphertext_to_keys)
+
+        self.analysis_result.insert(tk.END, f"\n分析结果:\n")
+        self.analysis_result.insert(tk.END, f"总密钥数: 1024\n")
+        self.analysis_result.insert(tk.END, f"不同密文数: {total_ciphertexts}\n")
+        self.analysis_result.insert(tk.END, f"理论最大不同密文数: 256\n")
+
+        # 查找碰撞
+        collision_groups = []
+        for ciphertext, keys in ciphertext_to_keys.items():
+            if len(keys) > 1:
+                collisions += 1
+                collision_groups.append((ciphertext, keys))
+
+        self.analysis_result.insert(tk.END, f"碰撞组数: {collisions}\n")
+
+        if collision_groups:
+            self.analysis_result.insert(tk.END, f"\n碰撞详情:\n")
+            for ciphertext, keys in collision_groups[:10]:  # 只显示前10组
+                self.analysis_result.insert(tk.END, f"密文 {ciphertext} 对应密钥: {len(keys)} 个\n")
+
+            if len(collision_groups) > 10:
+                self.analysis_result.insert(tk.END, f"... 还有 {len(collision_groups) - 10} 组碰撞未显示\n")
+
+        # 计算碰撞率
+        collision_rate = collisions / total_ciphertexts if total_ciphertexts > 0 else 0
+        self.analysis_result.insert(tk.END, f"\n碰撞率: {collision_rate:.4f}\n")
+
+        # 安全性分析
+        if collision_rate > 0.1:
+            self.analysis_result.insert(tk.END, "⚠️  碰撞率较高，安全性较差\n")
+        else:
+            self.analysis_result.insert(tk.END, "✓ 碰撞率较低，安全性较好\n")
+
+
+def main():
+    """主函数"""
+    root = tk.Tk()
+    app = SDesGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
